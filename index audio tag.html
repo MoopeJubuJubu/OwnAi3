@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Teachable Machine Audio Model</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    h1 {
+      font-size: 26px;
+      margin-bottom: 20px;
+      text-shadow: 1px 1px 3px rgba(0,0,0,0.3);
+    }
+
+    .card {
+      background: rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(10px);
+      padding: 30px;
+      border-radius: 20px;
+      box-shadow: 0px 4px 20px rgba(0,0,0,0.3);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+      width: 400px;
+      max-width: 90%;
+    }
+
+    button {
+      padding: 12px 25px;
+      border: none;
+      border-radius: 25px;
+      background: #ff6a00;
+      color: #fff;
+      font-size: 16px;
+      cursor: pointer;
+      transition: 0.3s;
+    }
+    button:hover {
+      background: #ff944d;
+    }
+    button:disabled {
+      background: #999;
+      cursor: not-allowed;
+    }
+
+    #waveform {
+      width: 100%;
+      height: 100px;
+      background: rgba(255,255,255,0.2);
+      border-radius: 10px;
+    }
+
+    #label-container {
+      width: 100%;
+    }
+    .label-row {
+      background: rgba(255, 255, 255, 0.15);
+      margin: 5px 0;
+      padding: 10px;
+      border-radius: 10px;
+      font-size: 14px;
+    }
+    .label-text {
+      margin-bottom: 5px;
+    }
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: rgba(255,255,255,0.3);
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    .progress {
+      height: 100%;
+      background: #ff6a00;
+      width: 0%;
+      transition: width 0.2s ease;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎙️ Teachable Machine Audio Model</h1>
+  <div class="card">
+    <canvas id="waveform"></canvas>
+    <div>
+      <button id="startBtn" onclick="startListening()">Start Mic</button>
+      <button id="stopBtn" onclick="stopListening()" disabled>Stop Mic</button>
+    </div>
+    <div id="label-container"></div>
+  </div>
+
+  <!-- Tensorflow & Teachable Machine -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/speech-commands@0.4.0/dist/speech-commands.min.js"></script>
+
+  <script>
+    const URL = "https://teachablemachine.withgoogle.com/models/nGzHfqTi3/";
+    let recognizer, classLabels, labelContainer;
+    let isListening = false;
+
+    let audioCtx, analyser, source, dataArray;
+    const canvas = document.getElementById("waveform");
+    const ctx = canvas.getContext("2d");
+
+    async function createModel() {
+      const checkpointURL = URL + "model.json";
+      const metadataURL = URL + "metadata.json";
+      recognizer = speechCommands.create(
+        "BROWSER_FFT",
+        undefined,
+        checkpointURL,
+        metadataURL
+      );
+      await recognizer.ensureModelLoaded();
+      return recognizer;
+    }
+
+    async function startListening() {
+      if (!recognizer) {
+        recognizer = await createModel();
+      }
+
+      classLabels = recognizer.wordLabels();
+      labelContainer = document.getElementById("label-container");
+      labelContainer.innerHTML = "";
+
+      // สร้างช่องแสดงผลพร้อม progress bar
+      for (let i = 0; i < classLabels.length; i++) {
+        const row = document.createElement("div");
+        row.className = "label-row";
+
+        const text = document.createElement("div");
+        text.className = "label-text";
+        text.innerHTML = `${classLabels[i]}: 0%`;
+
+        const progressBar = document.createElement("div");
+        progressBar.className = "progress-bar";
+        const progress = document.createElement("div");
+        progress.className = "progress";
+        progressBar.appendChild(progress);
+
+        row.appendChild(text);
+        row.appendChild(progressBar);
+
+        labelContainer.appendChild(row);
+      }
+
+      recognizer.listen(result => {
+        const scores = result.scores;
+        for (let i = 0; i < classLabels.length; i++) {
+          const percent = (scores[i] * 100).toFixed(1);
+          const row = labelContainer.childNodes[i];
+          row.querySelector(".label-text").innerHTML = `${classLabels[i]}: ${percent}%`;
+          row.querySelector(".progress").style.width = percent + "%";
+        }
+      }, {
+        includeSpectrogram: true,
+        probabilityThreshold: 0.75,
+        invokeCallbackOnNoiseAndUnknown: true,
+        overlapFactor: 0.5
+      });
+
+      isListening = true;
+      document.getElementById("startBtn").disabled = true;
+      document.getElementById("stopBtn").disabled = false;
+
+      startWaveform();
+    }
+
+    function stopListening() {
+      if (recognizer && isListening) {
+        recognizer.stopListening();
+        isListening = false;
+      }
+      document.getElementById("startBtn").disabled = false;
+      document.getElementById("stopBtn").disabled = true;
+      stopWaveform();
+    }
+
+    // 🎵 Draw waveform using Web Audio API
+    async function startWaveform() {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      source = audioCtx.createMediaStreamSource(stream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      const bufferLength = analyser.frequencyBinCount;
+      dataArray = new Uint8Array(bufferLength);
+      source.connect(analyser);
+      drawWaveform();
+    }
+
+    function drawWaveform() {
+      requestAnimationFrame(drawWaveform);
+      analyser.getByteTimeDomainData(dataArray);
+      ctx.fillStyle = "rgba(255,255,255,0.2)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "#ff6a00";
+      ctx.beginPath();
+
+      let sliceWidth = canvas.width * 1.0 / dataArray.length;
+      let x = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        let v = dataArray[i] / 128.0;
+        let y = v * canvas.height/2;
+        if (i === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+        x += sliceWidth;
+      }
+      ctx.lineTo(canvas.width, canvas.height/2);
+      ctx.stroke();
+    }
+
+    function stopWaveform() {
+      if (audioCtx) {
+        audioCtx.close();
+      }
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    // Resize canvas automatically
+    function resizeCanvas() {
+      canvas.width = canvas.clientWidth;
+      canvas.height = canvas.clientHeight;
+    }
+    window.addEventListener("resize", resizeCanvas);
+    resizeCanvas();
+  </script>
+</body>
+</html>
